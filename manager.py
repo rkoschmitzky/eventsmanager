@@ -1,6 +1,6 @@
 import logging
 
-logging.basicConfig(level=logging.info)
+logging.basicConfig(level=logging.INFO)
 LOG = logging.getLogger(name="events")
 
 
