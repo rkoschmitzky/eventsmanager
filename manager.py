@@ -70,7 +70,7 @@ class EventsManager(Singleton):
         """
         return [key for key, value in self.data.iteritems() if value["paused"]]
 
-    def add_event(self, event_name, adder, owner=None, description="", remover=None, adder_args=(), adder_kwargs={}, remover_args=(), remover_kwargs={}):
+    def add_event(self, event_name, adder, adder_args=(), adder_kwargs={}, owner=None, description="", remover=None, remover_args=(), remover_kwargs={}):
         """ registers an event
 
         Args:
@@ -92,35 +92,36 @@ class EventsManager(Singleton):
             return
         else:
             # returning callback values have to be stored within a list, see comments below
+            event_data = {"adder": adder,
+                          "adder_args": adder_args,
+                          "adder_kwargs": adder_kwargs,
+                          "remover": remover,
+                          "remover_args": remover_args,
+                          "remover_kwargs": remover_kwargs,
+                          "paused": False,
+                          "id_list": [],
+                          "owner": owner,
+                          "description": description
+                          }
             try:
-                event_data = {"adder": adder,
-                              "adder_args": adder_args,
-                              "adder_kwargs": adder_kwargs,
-                              "remover": remover,
-                              "remover_args": remover_args,
-                              "remover_kwargs": remover_kwargs,
-                              "paused": False,
-                              "id_list": [],
-                              "owner": owner,
-                              "description": description
-                              }
                 ids = adder(*adder_args, **adder_kwargs)
-                # keep the callers return value mutable
-                # this makes sense if we have to pause events, where a returned callback id will change
-                # and we have to update it
-                # the idea here is not to create new objects when readding/resuming an event
-                # and just modify the existing object, otherwise we wouldn't be able to update the returned value
-                # easily for a registered event
-                if not isinstance(ids, list):
-                    event_data["id_list"] = [ids]
-                else:
-                    event_data["id_list"] = ids
-                self.data[event_name] = event_data
-                LOG.info('Added event named %s' % event_name)
             except RuntimeError:
                 LOG.error('Failed to register callback.', exc_info=True)
+                return
+            # keep the callers return value mutable
+            # this makes sense if we have to pause events, where a returned callback id will change
+            # and we have to update it
+            # the idea here is not to create new objects when readding/resuming an event
+            # and just modify the existing object, otherwise we wouldn't be able to update the returned value
+            # easily for a registered event
+            if not isinstance(ids, list):
+                event_data["id_list"] = [ids]
+            else:
+                event_data["id_list"] = ids
+            self.data[event_name] = event_data
+            LOG.info('Added event named %s' % event_name)
 
-    def attach_remover(self, event_name, caller, callable_args=(), callable_kwargs={}):
+    def attach_remover(self, event_name, caller, caller_args=(), caller_kwargs={}):
         """ attaches a remover callable to an existing event
 
         Notes:
@@ -132,18 +133,19 @@ class EventsManager(Singleton):
         Args:
             event_name: registered event name
             caller: callable that will be used to remove the event callback
-            callable_args: callable arguments tuple
-            callable_kwargs: callabe keyword arguments dictionary
+            caller_args: callable arguments tuple
+            caller_kwargs: callabe keyword arguments dictionary
 
         Returns:
 
         """
         assert event_name in self.registered_events, "No event named '{0}' registered".format(event_name)
 
+        # todo: should we add a precheck if the remover would raise an exception?
         data = self.data.copy()
         data[event_name]["remover"] = caller
-        data[event_name]["remover_args"] = callable_args
-        data[event_name]["remover_kwargs"] = callable_kwargs
+        data[event_name]["remover_args"] = caller_args
+        data[event_name]["remover_kwargs"] = caller_kwargs
 
         self.data = data
 
@@ -157,7 +159,6 @@ class EventsManager(Singleton):
         Returns:
 
         """
-
         if restore_on_fail:
             raise NotImplementedError
 
@@ -166,11 +167,13 @@ class EventsManager(Singleton):
 
         try:
             remover(*args, **kwargs)
-            self._remove_from(data_copy, event_name)
-            self.data = data_copy
-            LOG.info("Removed event '{0}'".format(event_name))
-        except RuntimeError:
+        except StandardError:
             LOG.error("Not able to remove event '{0}'".format(event_name), exc_info=True)
+            return
+
+        self._remove_from(data_copy, event_name)
+        self.data = data_copy
+        LOG.info("Removed event '{}'".format(event_name))
 
     def pause_event(self, event_name):
         """ temporary removes an event, but keep it stored within the events
@@ -187,8 +190,8 @@ class EventsManager(Singleton):
             remover(*args, **kwargs)
             self._toggle_paused_state(event_name)
             LOG.info("Paused event '{0}'".format(event_name))
-        except RuntimeError:
-            LOG.error("Not able to pause event '{0}'".format(event_name))
+        except StandardError:
+            LOG.error("Not able to pause event '{}'".format(event_name), exc_info=True)
 
     def pause_events(self, exclude=[]):
         """ pause all events
@@ -260,10 +263,16 @@ class EventsManager(Singleton):
         Returns: (callable, args tuple, kwargs dict)
 
         """
+        assert event_name in self.registered_events
+
         event_data = self._get_event_data(event_name)
         if event_data:
-            assert event_data["remover"], "No event remover callable attached"
-            return event_data["remover"], event_data["remover_args"], event_data["remover_kwargs"]
+            try:
+                return event_data["remover"], event_data["remover_args"], event_data["remover_kwargs"]
+            except KeyError:
+                LOG.error("Missing event remover information for event '{}'".format(event_name),
+                          exc_info=True)
+        return None, (), {}
 
     def _toggle_paused_state(self, event_name):
         """ toggles the stored paused state

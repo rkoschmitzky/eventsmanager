@@ -1,4 +1,4 @@
-from manager import *
+from .manager import *
 
 Manager = EventsManager()
 
