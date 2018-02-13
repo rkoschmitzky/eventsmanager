@@ -1,3 +1,4 @@
+import copy
 import mock
 import unittest
 
@@ -42,7 +43,11 @@ class TestEventsManager(unittest.TestCase):
                                           "id_list": [],
                                           "owner": cls.owners[i],
                                           "description": cls.descriptions[i]
-                                         }
+                                          }
+
+    @classmethod
+    def setUp(cls):
+        cls.event_patch = copy.deepcopy(cls.prefilled_events)
 
     def test_add_event(self):
         for i, name in enumerate(self.names):
@@ -73,6 +78,17 @@ class TestEventsManager(unittest.TestCase):
             # check if description matches
             self.assertEqual(self.descriptions[i], EventsManager().data[name]["description"])
 
+        # check if the data looks the same if an adder is not callable
+        # or throws an error
+        data = EventsManager().data.copy()
+        EventsManager().add_event("Z", self.callable_w_error)
+        self.assertDictEqual(data, EventsManager().data)
+
+        # check if the event data looks the same if we want to register
+        # an event that already exists
+        EventsManager().add_event("A", self.callable_wo_effect)
+        self.assertDictEqual(data, EventsManager().data)
+
     def test_attach_remover(self):
         # check if we get a proper assertion error if the given event was not
         # registered
@@ -89,18 +105,75 @@ class TestEventsManager(unittest.TestCase):
         self.assertEqual({"test": True}, event_a_data["remover_kwargs"])
 
     def test_remove_event(self):
-        with self.assertRaises(AssertionError):
-            EventsManager().remove_event("Z")
+        # expect an assertion error if the event doesn't exist
+        with mock.patch.object(EventsManager, "data", self.event_patch):
+            with self.assertRaises(AssertionError):
+                EventsManager().remove_event("Z")
 
-        # add an uncallable remover and check if the event stays
+        # add a remover that throws an error and check if the event stays
         # active
-        event_patch = self.prefilled_events.copy()
+        self.event_patch["A"]["remover"] = self.callable_w_error
+        with mock.patch.object(EventsManager, "data", self.event_patch):
+            EventsManager().remove_event("A")
+            self.assertIn("A", EventsManager().registered_events)
+
+        # remove as soon as this feature has been implemented,
+        # so far check for an NotImplementedError
+        with mock.patch.object(EventsManager, "data", self.event_patch):
+            with self.assertRaises(NotImplementedError):
+                EventsManager().remove_event("A", restore_on_fail=True)
+
+        # check for a successful event removal
+        self.event_patch["A"]["remover"] = self.callable_wo_effect
+        with mock.patch.object(EventsManager, "data", self.event_patch):
+            EventsManager().remove_event("A")
+            self.assertNotIn("A", EventsManager().registered_events)
+
+    def test_paused_events(self):
+        with mock.patch.object(EventsManager, "data", self.event_patch):
+            self.assertEqual([], EventsManager().paused_events)
+
+        # set fake event pause state
+        self.event_patch["A"]["paused"] = True
+        with mock.patch.object(EventsManager, "data", self.event_patch):
+            self.assertEqual(["A"], EventsManager().paused_events)
+
+    def test_pause_event(self):
+        event_patch = copy.deepcopy(self.prefilled_events)
         event_patch["A"]["remover"] = self.callable_w_error
         with mock.patch.object(EventsManager, "data", event_patch):
-            EventsManager().remove_event("A")
+            EventsManager().pause_event("A")
             self.assertIn("A", EventsManager().registered_events)
 
         event_patch["A"]["remover"] = self.callable_wo_effect
         with mock.patch.object(EventsManager, "data", event_patch):
-            EventsManager().remove_event("A")
-            self.assertNotIn("A", EventsManager().registered_events)
+            EventsManager().pause_event("A")
+            self.assertIn("A", EventsManager().data)
+            self.assertTrue(EventsManager().data["A"]["paused"])
+
+    def test_pause_events(self):
+        for event_name, event_data in self.event_patch.iteritems():
+            event_data["remover"] = self.callable_wo_effect
+
+        with mock.patch.object(EventsManager, "data", self.event_patch):
+            EventsManager().pause_events(exclude=["A"])
+            for event_name, event_data in EventsManager().data.iteritems():
+                if event_name == "A":
+                    self.assertFalse(event_data["paused"])
+                else:
+                    self.assertTrue(event_data["paused"])
+
+    def test_resume_event(self):
+        # it looks like we are hitting a limitation within mock.patch
+        # because the patch is not working anymore
+        # the data attribute doesn't get any replacement, but still exists
+        # we can take this data directly and use the contextmanager only
+        # for our temporary actions
+        # smells fishy but works
+        with mock.patch.object(EventsManager, "", self.event_patch, create=True):
+            with self.assertRaises(AssertionError):
+                EventsManager().resume_event("A")
+
+            EventsManager().data["A"]["paused"] = True
+            EventsManager().resume_event("A")
+            self.assertFalse(EventsManager().data["A"]["paused"])

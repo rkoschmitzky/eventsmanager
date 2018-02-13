@@ -1,6 +1,8 @@
+import copy
 import logging
+import sys
 
-logging.basicConfig(level=logging.INFO)
+logging.basicConfig(level=logging.INFO, stream=sys.stdout)
 LOG = logging.getLogger(name="events")
 
 
@@ -25,7 +27,6 @@ class EventsManager(Singleton):
     """
 
     __data = {}  # all event data
-    __paused = {}  # temporary event data storage for paused events
 
     @property
     def data(self):
@@ -105,7 +106,7 @@ class EventsManager(Singleton):
                           }
             try:
                 ids = adder(*adder_args, **adder_kwargs)
-            except RuntimeError:
+            except StandardError:
                 LOG.error('Failed to register callback.', exc_info=True)
                 return
             # keep the callers return value mutable
@@ -131,10 +132,10 @@ class EventsManager(Singleton):
             The return value is stored inside the data attribute as "id_list".
 
         Args:
-            event_name: registered event name
-            caller: callable that will be used to remove the event callback
-            caller_args: callable arguments tuple
-            caller_kwargs: callabe keyword arguments dictionary
+            event_name (str): registered event name
+            caller (callable): callable that will be used to remove the event callback
+            caller_args (tuple): caller arguments
+            caller_kwargs (dict): caller keyword arguments
 
         Returns:
 
@@ -142,7 +143,7 @@ class EventsManager(Singleton):
         assert event_name in self.registered_events, "No event named '{0}' registered".format(event_name)
 
         # todo: should we add a precheck if the remover would raise an exception?
-        data = self.data.copy()
+        data = copy.deepcopy(self.data)
         data[event_name]["remover"] = caller
         data[event_name]["remover_args"] = caller_args
         data[event_name]["remover_kwargs"] = caller_kwargs
@@ -188,10 +189,12 @@ class EventsManager(Singleton):
 
         try:
             remover(*args, **kwargs)
-            self._toggle_paused_state(event_name)
-            LOG.info("Paused event '{0}'".format(event_name))
         except StandardError:
             LOG.error("Not able to pause event '{}'".format(event_name), exc_info=True)
+            return
+
+        self._toggle_paused_state(event_name)
+        LOG.info("Paused event '{0}'".format(event_name))
 
     def pause_events(self, exclude=[]):
         """ pause all events
@@ -203,7 +206,7 @@ class EventsManager(Singleton):
 
         """
         for event_name, event_data in self.data.iteritems():
-            if not event_data["paused"] and not event_name in exclude:
+            if not event_data["paused"] and event_name not in exclude:
                 self.pause_event(event_name)
 
     def resume_event(self, event_name):
@@ -251,7 +254,7 @@ class EventsManager(Singleton):
         if event_name in self.data.keys():
             return self.data[event_name]
         else:
-            LOG.info("Event '{0}' doesn't exist.".format(event_name))
+            LOG.warning("Event '{0}' doesn't exist.".format(event_name))
             return {}
 
     def _get_event_remover(self, event_name):
